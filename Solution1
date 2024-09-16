@@ -1,0 +1,223 @@
+{
+    init: function(elevators, floors) {
+        const DIRECTIONS = ["stopped","up","down"]; 
+        const THRESHOLD = 0.6;
+        
+
+        function getDirection(elevatorpos,floorNum) {
+            if (elevatorpos < floorNum) {
+                return DIRECTIONS[1];
+            } else if (elevatorpos > floorNum) {
+                return DIRECTIONS[2];
+            }
+            return DIRECTIONS[0];
+        }
+        
+        function removeFromQueueButOne(elevators,floorNum) {
+            for (let i = 0 ; i < elevators.length ; i++) {
+                if (!elevators[i].getPressedFloors ().includes(floorNum)) {
+                        elevators[i].destinationQueue = elevators[i].destinationQueue.filter((item) => item != floorNum);
+                        elevators[i].checkDestinationQueue();
+                    }
+            }
+        }
+
+        //Initialize all the important elevator things.
+        for (let i = 0 ; i < elevators.length ; i++) {
+            //Give each elevator it's own number for logging purposes
+            for (let j = 0 ; j < elevators.length ; j++) {
+                elevators[j].num = j;
+            }
+            
+            //What to do when the elevator has no destinations queued
+            elevators[i].on("idle", function() {
+                // We might as well go to the middle floor - least distance to travel
+                // this means no floor buttons or elevator buttons have been pressed
+                elevators[i].goToFloor(0);
+                console.log(i + " is idle!")
+
+            });
+            // What to do when an elevator passes a floor
+            elevators[i].on("passing_floor", function(floorNum, direction) { 
+                //First we need to make sure that the elevator doesn't stop with a full load, if it is stopping to pick up users.
+                // It can however stop on a floor it is passing if people need to be dropped off.
+                //Check if there are any passengers on board who need to be dropped off.
+                //In adition, check if there are any passengers who need to be picked up. This includes checking the queue of other elevators.
+                
+                for (let z = 0 ; z < elevators.length ; z++) {
+                    if (z == i) {
+                        if (elevators[z].getPressedFloors().includes(floorNum) || (elevators[z].destinationQueue.includes(floorNum) && elevators[i].loadFactor() < THRESHOLD)) {
+                            removeFromQueueButOne(elevators,floorNum);
+                            elevators[i].destinationQueue.unshift(floorNum);
+                            elevators[i].checkDestinationQueue();
+                            console.log(i + " Stopping at floor " + floorNum + "Load factor: " + elevators[i].loadFactor());
+                            break;
+                            
+                        }
+                    } else {
+                        if (elevators[z].destinationQueue.includes(floorNum) && !elevators[z].getPressedFloors().includes(floorNum) && elevators[i].loadFactor() < THRESHOLD) {
+                            removeFromQueueButOne(elevators,floorNum);
+                            elevators[i].destinationQueue.unshift(floorNum);
+                            elevators[i].checkDestinationQueue();
+                            console.log(i + " Stopping at floor " + floorNum + "Load factor: " + elevators[i].loadFactor());
+                            break;
+
+                        }
+                    }
+                }
+      
+            });
+
+            //What to do when a floor button is pressed on the elevator
+            elevators[i].on("floor_button_pressed", function(floorNum) {
+                //If the elevator is currently moving in the direction of that floor or is stopped, go to that floor
+                if (getDirection(elevators[i].currentFloor,floorNum) == DIRECTIONS[0] || getDirection(elevators[i].currentFloor,floorNum) == elevators[i].destinationDirection()) {
+                    if (!elevators[i].destinationQueue.includes(floorNum)) {
+                        elevators[i].destinationQueue.push(floorNum);
+                        elevators[i].checkDestinationQueue();
+                        console.log(i + " going to floor " + floorNum + " pushed in elevator");
+                    }
+                }
+
+            } );
+        }
+
+
+        //Initialize all the important floor things
+        for (let i = 0 ; i < floors.length ; i++) {
+            //If an up button is pressed
+
+            floors[i].on("up_button_pressed", function() {
+                // In the event that an up button is pressed, we want to iterate through all elevators
+                //Get all elevators that are below the floor and moving up?
+                // Maybe tell an elevator to go to this floor?
+   
+                
+                elevs = elevatorLoadList(elevators);
+                let winner = -1
+                let distance = floors.length;
+                
+                for (let j = 0 ; j < elevs.length ; j++) {
+                    if (elevs[j].destinationDirection() == DIRECTIONS[0] || elevs[j].destinationDirection() == DIRECTIONS[1]) {
+                        if (Math.abs(elevs[j].currentFloor() - i) < distance) {
+                            if (elevs[j].currentFloor() <= i) {
+                                distance = Math.abs(elevs[j].currentFloor() - i);
+                                winner = j;
+                            }
+                        } 
+                    }   
+                } 
+
+                if (winner < 0) {
+                    for (let j = 0 ; j < elevs.length ; j++) {
+                        if (Math.abs(elevs[j].currentFloor() - i) < distance) {
+                            distance = Math.abs(elevs[j].currentFloor() - i);
+                            winner = j;
+
+                        }
+                    }
+                } 
+
+
+
+                if (winner >= 0 && winner < elevs.length) {
+                    if (elevs[winner].loadFactor() < THRESHOLD) {
+                        
+                        if (!elevs[winner].destinationQueue.includes(floors[i].floorNum())) {
+                            elevs[winner].destinationQueue.push(floors[i].floorNum())
+                            elevs[winner].checkDestinationQueue();
+                            //console.log(elevs[winner].num + " floor queued to floor " + floors[i].floorNum() + "Current floor (" + elevs[winner].currentFloor() + ")");
+                        } //That means this elevator was already going to stop at the floor anyway - no point in doing anything
+                       
+                    } else {
+                        if (!elevs[0].destinationQueue.includes(floors[i].floorNum())) {
+                            //If the load factor is too high, that means this guy will be left forever on that floor! NOOOO
+                            elevs[0].destinationQueue.push(floors[i].floorNum())
+                            elevs[0].checkDestinationQueue();
+                            //console.log(elevs[0].num + " default floor queued to floor " + floors[i].floorNum() + "Current floor (" + elevs[0].currentFloor() + ")");
+                        }
+                    }
+
+                } else {
+                    throw new Error("A winner was not assigned");
+                }
+            });
+
+            //If a down button is pressed
+            floors[i].on("down_button_pressed", function() {
+                // Maybe tell an elevator to go to this floor?
+                elevs = elevatorLoadList(elevators);
+                let winner = -1
+                let distance = floors.length;
+                for (let j = 0 ; j < elevs.length ; j++) {
+                    if (elevs[j].destinationDirection() == DIRECTIONS[0] || elevs[j].destinationDirection() == DIRECTIONS[2]) {
+                        if (Math.abs(elevs[j].currentFloor() - i) < distance) {
+                            if (elevs[j].currentFloor() >= i) {
+                                distance = Math.abs(elevs[j].currentFloor() - i);
+                                winner = j;
+                            }
+                        } 
+                    }   
+                } 
+
+                if (winner < 0) {
+                    for (let j = 0 ; j < elevs.length ; j++) {
+                        if (Math.abs(elevs[j].currentFloor() - i) < distance) {
+                            distance = Math.abs(elevs[j].currentFloor() - i);
+                            winner = j;
+
+                        }
+                    }
+                } 
+
+
+
+                if (winner >= 0 && winner < elevs.length) {
+                    if (elevs[winner].loadFactor() < THRESHOLD) {
+                        if (!elevs[winner].destinationQueue.includes(floors[i].floorNum())) {
+                            elevs[winner].destinationQueue.push(floors[i].floorNum())
+                            elevs[winner].checkDestinationQueue();
+                            //console.log(elevs[winner].num + " floor queued to floor " + floors[i].floorNum() + "Current floor (" + elevs[winner].currentFloor() + ")")
+                        } //That means this elevator was already going to stop at the floor anyway - no point in doing anything
+
+                    } else {
+                        if (!elevs[0].destinationQueue.includes(floors[i].floorNum())) {
+                            //If the load factor is too high, that means this guy will be left forever on that floor! NOOOO
+                            elevs[0].destinationQueue.push(floors[i].floorNum())
+                            elevs[0].checkDestinationQueue();
+                            //console.log(elevs[0].num + " default floor queued to floor " + floors[i].floorNum() + "Current floor (" + elevs[0].currentFloor() + ")")
+                        }
+                    }
+
+                } else {
+                    throw new Error("A winner was not assigned");
+                }
+
+            });
+
+        }
+        
+
+        //This function returns a list of the most available to the least available elevators
+        function elevatorLoadList(elevators) {
+            let order = [...elevators];
+            let swap = true;
+            while (swap) {
+                swap = false;
+                for (let j = 1 ; j < order.length ; j++) {
+                    if (order[j-1].loadFactor() > order[j].loadFactor()) {
+                        let placeholder = order[j-1]
+                        order[j-1] = order[j];
+                        order[j] = placeholder;
+                        swap = true;
+                    }
+                }
+            }
+            return order;
+        }
+
+    },
+        update: function(dt, elevators, floors) {
+            // We normally don't need to do anything here
+        }
+}
